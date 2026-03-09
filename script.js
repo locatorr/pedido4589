@@ -1,35 +1,41 @@
 document.addEventListener('DOMContentLoaded', () => {
 
     // ================= CONFIG =================
-    const CHECKPOINT_INICIO = [-3.1190, -60.0217]; // Manaus
-    const CHAVE_INICIO_RESTANTE = 'inicio_viagem_restante';
 
-    // ponto da rota onde ficará parado (entre João Pessoa e Paranaguá)
-    const POSICAO_PRF = 0.70;
+    const CHECKPOINT_INICIO = [-3.1190, -60.0217]; // Manaus
+    const DURACAO_VIAGEM = 4 * 24 * 60 * 60 * 1000; // 4 dias em ms
+    const CHAVE_INICIO = "inicio_viagem";
 
     // ================= ROTAS =================
+
     const ROTAS = {
         "58036": {
-            destinoNome: "Paranaguá - PR",
-            destinoDesc: "Rota: Manaus → Paraíba → Paranaguá",
-            
+            destinoNome: "57750-000 - AL",
+            destinoDesc: "Rota: Manaus → Alagoas",
+
             waypoints: [
-                [-60.0217, -3.1190],   // Manaus
-                [-34.8641, -7.1150],   // João Pessoa
-                [-48.5095, -25.5163]   // Paranaguá
+                [-60.0217, -3.1190], // Manaus
+                [-37.2069, -9.5928]  // CEP 57750-000 (Aprox Alagoas)
             ]
         }
     };
 
     // ================= VARIÁVEIS =================
-    let map, polyline, carMarker;
+
+    let map;
     let fullRoute = [];
+    let carMarker;
+    let polyline;
     let rotaAtual = null;
 
     document.getElementById('btn-login')?.addEventListener('click', verificarCodigo);
+
     verificarSessaoSalva();
 
+    // ================= LOGIN =================
+
     function verificarCodigo() {
+
         const code = document.getElementById('access-code').value.trim();
 
         if (!ROTAS[code]) {
@@ -37,34 +43,46 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        localStorage.setItem('codigoAtivo', code);
+        localStorage.setItem("codigoAtivo", code);
+
+        if (!localStorage.getItem(CHAVE_INICIO)) {
+            localStorage.setItem(CHAVE_INICIO, Date.now());
+        }
+
         carregarInterface(code);
     }
 
     function verificarSessaoSalva() {
-        const codigo = localStorage.getItem('codigoAtivo');
+
+        const codigo = localStorage.getItem("codigoAtivo");
 
         if (codigo && ROTAS[codigo]) {
-            document.getElementById('access-code').value = codigo;
+
+            document.getElementById("access-code").value = codigo;
+
+            carregarInterface(codigo);
         }
     }
+
+    // ================= CARREGAR =================
 
     function carregarInterface(codigo) {
 
         rotaAtual = ROTAS[codigo];
 
-        buscarRotaComParada(rotaAtual.waypoints).then(() => {
+        buscarRota(rotaAtual.waypoints).then(() => {
 
             document.getElementById('login-overlay').style.display = 'none';
             document.getElementById('info-card').style.display = 'flex';
 
             iniciarMapa();
-
+            iniciarAnimacao();
         });
-
     }
 
-    async function buscarRotaComParada(pontos) {
+    // ================= BUSCAR ROTA =================
+
+    async function buscarRota(pontos) {
 
         const coordenadas = pontos.map(p => `${p[0]},${p[1]}`).join(';');
 
@@ -75,6 +93,8 @@ document.addEventListener('DOMContentLoaded', () => {
         fullRoute = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
     }
 
+    // ================= MAPA =================
+
     function iniciarMapa() {
 
         map = L.map('map', { zoomControl: false }).setView(CHECKPOINT_INICIO, 5);
@@ -83,80 +103,91 @@ document.addEventListener('DOMContentLoaded', () => {
             'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
         ).addTo(map);
 
-        // rota completa
         L.polyline(fullRoute, {
             color: '#94a3b8',
             weight: 4,
             opacity: 0.5
         }).addTo(map);
 
-        polyline = L.polyline(fullRoute, {
+        polyline = L.polyline([], {
             color: '#2563eb',
-            weight: 5,
-            dashArray: '10,10'
+            weight: 5
         }).addTo(map);
-
-        // cálculo da posição onde ficará parado
-        const posReal = POSICAO_PRF * (fullRoute.length - 1);
-
-        const idx = Math.floor(posReal);
-        const t = posReal - idx;
-
-        const p1 = fullRoute[idx];
-        const p2 = fullRoute[idx + 1] || p1;
-
-        const lat = p1[0] + (p2[0] - p1[0]) * t;
-        const lng = p1[1] + (p2[1] - p1[1]) * t;
-
-        const pos = [lat, lng];
 
         const truckIcon = L.divIcon({
             className: 'custom-marker',
-            html: `
-            <div style="text-align:center">
-                <div style="
-                    background:#ef4444;
-                    color:white;
-                    font-size:11px;
-                    padding:3px 6px;
-                    border-radius:6px;
-                    margin-bottom:3px;
-                    font-weight:bold;
-                ">
-                🚔 RETIDO NA PRF
-                </div>
-                <div style="font-size:32px;">🚛</div>
-            </div>
-            `,
-            iconSize: [40, 40],
-            iconAnchor: [20, 20]
+            html: `<div style="font-size:34px;">🚛</div>`,
+            iconSize: [40,40],
+            iconAnchor: [20,20]
         });
 
-        carMarker = L.marker(pos, {
+        carMarker = L.marker(fullRoute[0], {
             icon: truckIcon,
             zIndexOffset: 1000
         }).addTo(map);
-
-        map.setView(pos, 6);
-
-        const badge = document.getElementById('time-badge');
-        if (badge) {
-            badge.innerText = "RETIDO NA PRF";
-        }
-
-        desenharLinhaRestante(pos, idx);
     }
 
-    function desenharLinhaRestante(pos, idx) {
+    // ================= ANIMAÇÃO =================
 
-        map.removeLayer(polyline);
+    function iniciarAnimacao() {
 
-        polyline = L.polyline(
-            [pos, ...fullRoute.slice(idx + 1)],
-            { dashArray: '10,10', color: '#2563eb', weight: 5 }
-        ).addTo(map);
+        const inicio = Number(localStorage.getItem(CHAVE_INICIO));
+
+        setInterval(() => {
+
+            const agora = Date.now();
+
+            let progresso = (agora - inicio) / DURACAO_VIAGEM;
+
+            if (progresso > 1) progresso = 1;
+
+            const posReal = progresso * (fullRoute.length - 1);
+
+            const idx = Math.floor(posReal);
+
+            const t = posReal - idx;
+
+            const p1 = fullRoute[idx];
+            const p2 = fullRoute[idx + 1] || p1;
+
+            const lat = p1[0] + (p2[0] - p1[0]) * t;
+            const lng = p1[1] + (p2[1] - p1[1]) * t;
+
+            const pos = [lat, lng];
+
+            carMarker.setLatLng(pos);
+
+            polyline.setLatLngs(fullRoute.slice(0, idx + 1));
+
+            map.panTo(pos, { animate:true });
+
+            atualizarTempoRestante(progresso);
+
+        }, 5000);
+    }
+
+    // ================= TEMPO RESTANTE =================
+
+    function atualizarTempoRestante(progresso) {
+
+        const badge = document.getElementById("time-badge");
+
+        if (!badge) return;
+
+        const restante = DURACAO_VIAGEM * (1 - progresso);
+
+        if (restante <= 0) {
+
+            badge.innerText = "ENTREGUE";
+
+            return;
+        }
+
+        const dias = Math.floor(restante / 86400000);
+        const horas = Math.floor((restante % 86400000) / 3600000);
+        const minutos = Math.floor((restante % 3600000) / 60000);
+
+        badge.innerText = `${dias}d ${horas}h ${minutos}m`;
     }
 
 });
-
-
