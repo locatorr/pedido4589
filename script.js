@@ -2,20 +2,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ================= CONFIG =================
 
-    const CHECKPOINT_INICIO = [-3.1190, -60.0217]; // Manaus
-    const DURACAO_VIAGEM = 4 * 24 * 60 * 60 * 1000; // 4 dias em ms
+    const ORIGEM = [-3.1190, -60.0217]; // Manaus
+    const DESTINO = [2.8235, -60.6753]; // CEP 69310-188 (Boa Vista RR)
+
+    const DURACAO_VIAGEM = 72 * 60 * 60 * 1000; // 3 dias em ms
     const CHAVE_INICIO = "inicio_viagem";
 
     // ================= ROTAS =================
 
     const ROTAS = {
         "58036": {
-            destinoNome: "57750-000 - AL",
-            destinoDesc: "Rota: Manaus → Alagoas",
-
+            destinoNome: "Boa Vista - RR",
+            destinoDesc: "Rota: Manaus → Boa Vista",
             waypoints: [
                 [-60.0217, -3.1190], // Manaus
-                [-37.2069, -9.5928]  // CEP 57750-000 (Aprox Alagoas)
+                [-60.6753, 2.8235]   // Boa Vista
             ]
         }
     };
@@ -26,7 +27,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let fullRoute = [];
     let carMarker;
     let polyline;
-    let rotaAtual = null;
 
     document.getElementById('btn-login')?.addEventListener('click', verificarCodigo);
 
@@ -43,7 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        localStorage.setItem("codigoAtivo", code);
+        localStorage.setItem('codigoAtivo', code);
 
         if (!localStorage.getItem(CHAVE_INICIO)) {
             localStorage.setItem(CHAVE_INICIO, Date.now());
@@ -54,30 +54,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function verificarSessaoSalva() {
 
-        const codigo = localStorage.getItem("codigoAtivo");
+        const codigo = localStorage.getItem('codigoAtivo');
 
         if (codigo && ROTAS[codigo]) {
-
-            document.getElementById("access-code").value = codigo;
-
+            document.getElementById('access-code').value = codigo;
             carregarInterface(codigo);
         }
     }
 
-    // ================= CARREGAR =================
-
     function carregarInterface(codigo) {
 
-        rotaAtual = ROTAS[codigo];
+        const rota = ROTAS[codigo];
 
-        buscarRota(rotaAtual.waypoints).then(() => {
+        buscarRota(rota.waypoints).then(() => {
 
             document.getElementById('login-overlay').style.display = 'none';
             document.getElementById('info-card').style.display = 'flex';
 
             iniciarMapa();
-            iniciarAnimacao();
+
         });
+
     }
 
     // ================= BUSCAR ROTA =================
@@ -97,12 +94,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function iniciarMapa() {
 
-        map = L.map('map', { zoomControl: false }).setView(CHECKPOINT_INICIO, 5);
+        map = L.map('map', { zoomControl: false }).setView(ORIGEM, 6);
 
         L.tileLayer(
             'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
         ).addTo(map);
 
+        // rota completa
         L.polyline(fullRoute, {
             color: '#94a3b8',
             weight: 4,
@@ -111,27 +109,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
         polyline = L.polyline([], {
             color: '#2563eb',
-            weight: 5
+            weight: 5,
+            dashArray: '10,10'
         }).addTo(map);
 
         const truckIcon = L.divIcon({
             className: 'custom-marker',
-            html: `<div style="font-size:34px;">🚛</div>`,
+            html: `
+            <div style="text-align:center">
+                <div style="
+                    background:#2563eb;
+                    color:white;
+                    font-size:11px;
+                    padding:3px 6px;
+                    border-radius:6px;
+                    margin-bottom:3px;
+                    font-weight:bold;
+                ">
+                🚚 EM ROTA
+                </div>
+                <div style="font-size:32px;">🚛</div>
+            </div>
+            `,
             iconSize: [40,40],
             iconAnchor: [20,20]
         });
 
-        carMarker = L.marker(fullRoute[0], {
+        carMarker = L.marker(ORIGEM, {
             icon: truckIcon,
             zIndexOffset: 1000
         }).addTo(map);
+
+        iniciarMovimento();
     }
 
-    // ================= ANIMAÇÃO =================
+    // ================= MOVIMENTO EM TEMPO REAL =================
 
-    function iniciarAnimacao() {
+    function iniciarMovimento() {
 
-        const inicio = Number(localStorage.getItem(CHAVE_INICIO));
+        const inicio = parseInt(localStorage.getItem(CHAVE_INICIO));
 
         setInterval(() => {
 
@@ -141,53 +157,72 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (progresso > 1) progresso = 1;
 
-            const posReal = progresso * (fullRoute.length - 1);
+            const posicao = calcularPosicao(progresso);
 
-            const idx = Math.floor(posReal);
+            carMarker.setLatLng(posicao);
 
-            const t = posReal - idx;
+            map.panTo(posicao, { animate: true });
 
-            const p1 = fullRoute[idx];
-            const p2 = fullRoute[idx + 1] || p1;
+            atualizarLinha(posicao);
 
-            const lat = p1[0] + (p2[0] - p1[0]) * t;
-            const lng = p1[1] + (p2[1] - p1[1]) * t;
+        }, 2000);
 
-            const pos = [lat, lng];
-
-            carMarker.setLatLng(pos);
-
-            polyline.setLatLngs(fullRoute.slice(0, idx + 1));
-
-            map.panTo(pos, { animate:true });
-
-            atualizarTempoRestante(progresso);
-
-        }, 5000);
     }
 
-    // ================= TEMPO RESTANTE =================
+    // ================= CALCULAR POSIÇÃO =================
 
-    function atualizarTempoRestante(progresso) {
+    function calcularPosicao(progresso) {
 
-        const badge = document.getElementById("time-badge");
+        const posReal = progresso * (fullRoute.length - 1);
 
-        if (!badge) return;
+        const idx = Math.floor(posReal);
 
-        const restante = DURACAO_VIAGEM * (1 - progresso);
+        const t = posReal - idx;
 
-        if (restante <= 0) {
+        const p1 = fullRoute[idx];
+        const p2 = fullRoute[idx + 1] || p1;
 
-            badge.innerText = "ENTREGUE";
+        const lat = p1[0] + (p2[0] - p1[0]) * t;
+        const lng = p1[1] + (p2[1] - p1[1]) * t;
 
-            return;
-        }
+        return [lat, lng];
+    }
 
-        const dias = Math.floor(restante / 86400000);
-        const horas = Math.floor((restante % 86400000) / 3600000);
-        const minutos = Math.floor((restante % 3600000) / 60000);
+    // ================= LINHA RESTANTE =================
 
-        badge.innerText = `${dias}d ${horas}h ${minutos}m`;
+    function atualizarLinha(pos) {
+
+        const idx = encontrarIndiceMaisProximo(pos);
+
+        map.removeLayer(polyline);
+
+        polyline = L.polyline(
+            [pos, ...fullRoute.slice(idx + 1)],
+            {
+                dashArray: '10,10',
+                color: '#2563eb',
+                weight: 5
+            }
+        ).addTo(map);
+    }
+
+    function encontrarIndiceMaisProximo(pos) {
+
+        let menor = Infinity;
+        let indice = 0;
+
+        fullRoute.forEach((p, i) => {
+
+            const d = Math.hypot(p[0] - pos[0], p[1] - pos[1]);
+
+            if (d < menor) {
+                menor = d;
+                indice = i;
+            }
+
+        });
+
+        return indice;
     }
 
 });
